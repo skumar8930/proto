@@ -1,0 +1,294 @@
+Pubsub setting.
+---------------
+
+1. Add lognet dependency in all services.
+
+        <dependency>
+			<groupId>io.github.lognet</groupId>
+			<artifactId>grpc-spring-boot-starter</artifactId>
+			<version>4.7.1</version>
+		</dependency>
+
+==========================================================================================================================
+
+2. Add protobuf compiler in proto buf generation service.
+----------------------------------------------------------
+
+<build>
+		<extensions>
+			<extension>
+				<groupId>kr.motd.maven</groupId>
+				<artifactId>os-maven-plugin</artifactId>
+				<version>1.6.2</version>
+			</extension>
+		</extensions>
+		<plugins>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+				<configuration>
+					<classifier>exec</classifier>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.xolstice.maven.plugins</groupId>
+				<artifactId>protobuf-maven-plugin</artifactId>
+				<version>0.6.1</version>
+				<configuration>
+					<protocArtifact>com.google.protobuf:protoc:3.17.2:exe:${os.detected.classifier}</protocArtifact>
+					<pluginId>grpc-java</pluginId>
+					<pluginArtifact>io.grpc:protoc-gen-grpc-java:1.39.0:exe:${os.detected.classifier}</pluginArtifact>
+				</configuration>
+				<executions>
+					<execution>
+						<goals>
+							<goal>compile</goal>
+							<goal>compile-custom</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<configuration>
+					<source>10</source>
+					<target>10</target>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+
+==================================================================================================================
+
+3. create prot file example Student.proto
+-------------------------------------------------------------------
+File name Student.proto
+
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "com.sandeep";
+
+service StudentService {
+  rpc GetStudent(StudentRequest) returns (StudentResponse) {};
+}
+
+message StudentRequest {
+  int32 id = 1;
+
+}
+
+message StudentResponse {
+  string name = 1;
+  int32 age = 2;
+  string branch=3;
+}
+----------------------------------------------------------------------------------------------
+here option java_package = "com.sandeep"; is a package where all the Proto buf generated java classes will be available
+this file contain message and service.
+message is equivalent to class where we are creating class and defining field.
+service is the rpc method which is client used to send request to server. and server will override it and will return
+response.
+--------------------------------------------
+below is the code to send request to server.
+-------------------------------------------
+
+
+public static void sendRequestToServer() {
+		ManagedChannel managedChannel = ManagedChannelBuilder.forAddress("localhost", 6565).usePlaintext().build();
+		StudentServiceGrpc.StudentServiceBlockingStub blockingStub  = StudentServiceGrpc.newBlockingStub(managedChannel);
+		//StudentRequest studentRequest = StudentRequest.newBuilder().setId(1).build();
+		StudentReq req= new StudentReq();
+		req.setId(1);
+	  StudentResponse respons =blockingStub.getStudent(Converter.create().toProtobuf(StudentRequest.class,req));
+	  Student student= Converter.create().toDomain(Student.class,respons);
+	  System.out.println("Response received "+respons.getName());
+
+	}
+
+	in the code
+
+	ManagedChannel class is used to estabilished connection between client and server
+	by default grpc server running on port 6565.
+
+	next,
+	 we have created   StudentService in proto file so proto generation compiler create a class
+	StudentServiceGrpc,  we are crating stub, stub is used to call rpc method running on server.
+
+	----------------------------------------------------------------------------------------------------------------
+
+
+	Q. How server give response ?
+	-----------------------------------------
+	below is the server code
+=========================================================================================================================
+
+package com.sandeep.server;
+
+import com.sandeep.StudentRequest;
+import com.sandeep.StudentResponse;
+import com.sandeep.StudentServiceGrpc;
+import io.grpc.stub.StreamObserver;
+import org.lognet.springboot.grpc.GRpcService;
+
+
+@GRpcService
+public class Grpcserver extends StudentServiceGrpc.StudentServiceImplBase {
+    StudentResponse response = StudentResponse.newBuilder().setAge(10).setName("Anubhav").setBranch("CS").build();
+
+    @Override
+    public void getStudent(StudentRequest request, StreamObserver<StudentResponse> responseObserver) {
+        responseObserver.onNext(response);
+        responseObserver.onCompleted();
+    }
+}
+
+======================================================================================================================
+
+In server we need to create a class by extending StudentServiceGrpc.StudentServiceImplBase created by proto buf compiler
+from proto file. and mark top annotation as @GRpcService.
+in this class override the rpc service method this is the method which client code calling.
+so in server we need to override it and return response by using responseObserver.
+
+===================================================================================================================
+
+Conversion of Domain to Protobuf.
+---------------------------------
+here we have
+net.badata.protobuf.converter.Converter; utility to convert domain object to protobuf object and protobuf object to  to domain
+object.
+
+below is the code which is converting domain to protobuf object and sending protobuf object to server
+
+StudentReq req= new StudentReq();
+req.setId(1);
+//here req is the domain object, now convert it to protobuf object as below
+
+StudentRequest studentRequest = Converter.create().toProtobuf(StudentRequest.class,req)
+
+// here StudentRequest.class is the protobuf class it should be configured in domain class as below
+
+===============================================================================================
+
+package model;
+
+import com.sandeep.StudentRequest;
+import net.badata.protobuf.converter.annotation.ProtoClass;
+import net.badata.protobuf.converter.annotation.ProtoField;
+
+@ProtoClass(StudentRequest.class)// define proto class here
+
+public class StudentReq {
+    @ProtoField
+    Integer id;
+
+    public Integer getId() {
+        return id;
+    }
+    public void setId(Integer id) {
+        this.id = id;
+    }
+}
+========================================================================================================
+after sending protobuf request to grpc server then the server again will give us response as a protobuf object
+then we need to convert it to domain  object. for eg.
+
+    StudentResponse respons =blockingStub.getStudent(Converter.create().toProtobuf(StudentRequest.class,req));
+
+	here we are getting StudentResponse as protobuf we need to convert it Student domain object as below.
+
+	Student student= Converter.create().toDomain(Student.class,respons);
+
+	so Student class is the domain class which must be mapped with  StudentResponse proto class.
+
+	===================================================================================
+
+	package model;
+
+    import com.sandeep.StudentResponse;
+    import net.badata.protobuf.converter.annotation.ProtoClass;
+    import net.badata.protobuf.converter.annotation.ProtoField;
+
+    @ProtoClass(StudentResponse.class)// keep proto class here
+    public class Student {
+
+        @ProtoField
+        private String name;
+        @ProtoField
+        private Integer age;
+        @ProtoField
+        private String branch;
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        public Integer getAge() {
+            return age;
+        }
+
+        public void setAge(Integer age) {
+            this.age = age;
+        }
+
+        public String getBranch() {
+            return branch;
+        }
+
+        public void setBranch(String branch) {
+            this.branch = branch;
+        }
+
+
+    }
+
+=====================================================================================================
+
+so conversion is only possible if our domain class mapped with protobuf class as above.
+====================================================================================================================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
